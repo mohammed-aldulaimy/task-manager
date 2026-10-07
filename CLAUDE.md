@@ -27,6 +27,7 @@ Layered pattern: routes -> services. Services are the data layer; there is no re
 Routes (routes/api.py): Parse the request, call one service function, return jsonify(___). 
     Blueprint mounted at /api in app.py
     Read bodies with request.get_json(silent=True) or {} and data.get(...), so missing fields reach service validation (422) instead of a 500
+    Exception, PATCH: pass only the keys present in the body (e.g. update_task(task_id, **{k: data[k] for k in (...) if k in data})), since data.get turns an omitted field into None, and None is a real value (null due_date clears it). Routes never import the service's private _UNSET marker
     Creating something returns 201; mutating a task's tags returns {"task_id": ..., "tags": [...]}
 Services (services/tasks.py, services/users.py, services/tags.py): All validation and data access. Each module owns its store
     Stores are module-level in-memory structures (USERS, TASKS dicts); data resets on server restart

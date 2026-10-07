@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from enum import Enum
 
 from services.users import get_user
 from utils.errors import NotFoundError, ValidationError
@@ -8,6 +9,12 @@ TASK_STATUSES = ("todo", "in_progress", "done")
 PRIORITY_MIN = 1
 PRIORITY_MAX = 5
 PRIORITY_DEFAULT = 3
+
+class _Unset(Enum):
+    """Marker type for an update_task field that was not provided."""
+    UNSET = "UNSET"
+
+_UNSET = _Unset.UNSET
 
 TASKS: dict[int, dict] = {
     1: {"id": 1, "title": "Buy groceries", "done": False, "status": "todo",
@@ -52,6 +59,22 @@ def get_task(task_id: int) -> dict:
     if task_id not in TASKS:
         raise NotFoundError("Task")
     return TASKS[task_id]
+
+def _validate_title(title: str) -> None:
+    """Validate a task title.
+
+    Args:
+        title: The task's title. Must be a string with at least one
+            non-whitespace character.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If title is None, not a string, or blank.
+    """
+    if not isinstance(title, str) or not title.strip():
+        raise ValidationError("title", "cannot be empty")
 
 def _validate_due_date(due_date: str | None) -> None:
     """Validate an optional ISO-8601 due date.
@@ -120,8 +143,7 @@ def create_task(
             date, or priority is not an integer from 1 to 5.
         NotFoundError: If no user exists with the given user_id.
     """
-    if not title or not title.strip():
-        raise ValidationError("title", "cannot be empty")
+    _validate_title(title)
     _validate_due_date(due_date)
     _validate_priority(priority)
     get_user(user_id)
@@ -136,6 +158,50 @@ def create_task(
         "priority": priority,
     }
     return TASKS[new_id]
+
+def update_task(
+    task_id: int,
+    title: str | _Unset = _UNSET,
+    due_date: str | None | _Unset = _UNSET,
+    priority: int | _Unset = _UNSET,
+) -> dict:
+    """Update a task's title, due date, and/or priority.
+
+    A field that is omitted is not changed. All provided fields are
+    validated before any is applied, so an invalid field leaves the task
+    unchanged. Passing no fields returns the task as-is.
+
+    Args:
+        task_id: The unique identifier for the task.
+        title: The new title; omit to keep the current one.
+        due_date: The new ISO-8601 due date (YYYY-MM-DD), or None to remove
+            the due date; omit to keep the current one.
+        priority: The new priority from 1 (urgent) to 5 (low); omit to keep
+            the current one.
+
+    Returns:
+        The updated task record.
+
+    Raises:
+        ValidationError: If title is None or empty, due_date is not None and
+            not a valid ISO-8601 date, or priority is None or not an integer
+            from 1 to 5.
+        NotFoundError: If no task exists with the given ID.
+    """
+    if title is not _UNSET:
+        _validate_title(title)
+    if due_date is not _UNSET:
+        _validate_due_date(due_date)
+    if priority is not _UNSET:
+        _validate_priority(priority)
+    task = get_task(task_id)
+    if title is not _UNSET:
+        task["title"] = title
+    if due_date is not _UNSET:
+        task["due_date"] = due_date
+    if priority is not _UNSET:
+        task["priority"] = priority
+    return task
 
 def get_tasks_for_user(user_id: int) -> list[dict]:
     """Retrieve all tasks owned by a user.
@@ -173,23 +239,32 @@ def get_overdue_tasks(today: date | None = None) -> list[dict]:
         and task["status"] != "done"
     ]
 
-def list_tasks(tag: str | None = None) -> list[dict]:
-    """Retrieve all tasks, optionally filtered by tag.
+def list_tasks(tag: str | None = None, priority: int | None = None) -> list[dict]:
+    """Retrieve all tasks, optionally filtered by tag and/or priority.
+
+    When both filters are given, a task must match both.
 
     Args:
-        tag: If given, only tasks carrying this tag are returned; if None,
-            every task is returned.
+        tag: If given, only tasks carrying this tag are returned.
+        priority: If given, only tasks with this priority are returned.
 
     Returns:
-        A list of task records, empty if no task has the given tag.
+        A list of task records, empty if no task matches the filters.
 
     Raises:
-        ValidationError: If tag is not None and not a valid tag name.
+        ValidationError: If tag is not None and not a valid tag name, or
+            priority is not None and not an integer from 1 to 5.
     """
     from services.tags import TASK_TAGS, _validate_tag
 
-    if tag is None:
-        return list(TASKS.values())
-    _validate_tag(tag)
-    tagged_ids = {task_id for task_id, t in TASK_TAGS if t == tag}
-    return [task for task in TASKS.values() if task["id"] in tagged_ids]
+    if tag is not None:
+        _validate_tag(tag)
+    if priority is not None:
+        _validate_priority(priority)
+    tasks = list(TASKS.values())
+    if tag is not None:
+        tagged_ids = {task_id for task_id, t in TASK_TAGS if t == tag}
+        tasks = [task for task in tasks if task["id"] in tagged_ids]
+    if priority is not None:
+        tasks = [task for task in tasks if task["priority"] == priority]
+    return tasks
