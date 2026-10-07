@@ -2,11 +2,13 @@ from flask import Blueprint, jsonify, request
 
 from services.tags import add_tag, remove_tag
 from services.tasks import (  # noqa: F401
+    PRIORITY_DEFAULT,
     create_task,
     get_overdue_tasks,
     get_task,
     list_tasks,
     process_order,
+    update_task,
 )
 from services.users import get_user
 from utils.errors import AppError
@@ -25,14 +27,29 @@ def get_overdue_tasks_route():
 def get_task_route(task_id):
     return jsonify(get_task(task_id))
 
+@api.route("/tasks/<int:task_id>", methods=["PATCH"])
+def update_task_route(task_id):
+    data = request.get_json(silent=True) or {}
+    fields = {k: data[k] for k in ("title", "due_date", "priority") if k in data}
+    return jsonify(update_task(task_id, **fields))
+
 @api.route("/tasks", methods=["POST"])
 def create_task_route():
-    data = request.get_json()
-    return jsonify(create_task(data["title"], data["user_id"], data.get("due_date"))), 201
+    data = request.get_json(silent=True) or {}
+    task = create_task(
+        data.get("title"),
+        data.get("user_id"),
+        data.get("due_date"),
+        data.get("priority", PRIORITY_DEFAULT),
+    )
+    return jsonify(task), 201
 
 @api.route("/tasks", methods=["GET"])
 def list_tasks_route():
-    return jsonify(list_tasks(request.args.get("tag")))
+    priority = request.args.get("priority")
+    if priority is not None and priority.isdecimal():
+        priority = int(priority)
+    return jsonify(list_tasks(request.args.get("tag"), priority=priority))
 
 @api.route("/tasks/<int:task_id>/tags", methods=["POST"])
 def add_tag_route(task_id):
