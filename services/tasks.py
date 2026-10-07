@@ -5,13 +5,17 @@ from utils.errors import NotFoundError, ValidationError
 
 TASK_STATUSES = ("todo", "in_progress", "done")
 
+PRIORITY_MIN = 1
+PRIORITY_MAX = 5
+PRIORITY_DEFAULT = 3
+
 TASKS: dict[int, dict] = {
     1: {"id": 1, "title": "Buy groceries", "done": False, "status": "todo",
-        "due_date": "2026-01-15", "user_id": 1},
+        "due_date": "2026-01-15", "user_id": 1, "priority": 3},
     2: {"id": 2, "title": "Write report",  "done": False, "status": "todo",
-        "due_date": "2099-12-31", "user_id": 1},
+        "due_date": "2099-12-31", "user_id": 1, "priority": 2},
     3: {"id": 3, "title": "Call dentist",  "done": True,  "status": "done",
-        "due_date": "2026-01-01", "user_id": 2},
+        "due_date": "2026-01-01", "user_id": 2, "priority": 3},
 }
 
 def process_order(task_id: int) -> dict:
@@ -70,24 +74,56 @@ def _validate_due_date(due_date: str | None) -> None:
     except ValueError:
         raise ValidationError("due_date", "must be an ISO-8601 date (YYYY-MM-DD)") from None
 
-def create_task(title: str, user_id: int, due_date: str | None = None) -> dict:
+def _validate_priority(priority: int) -> None:
+    """Validate a task priority.
+
+    Args:
+        priority: An integer from PRIORITY_MIN (urgent) to PRIORITY_MAX (low).
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If priority is None, not an integer (bools and
+            numeric strings are rejected), or outside PRIORITY_MIN..PRIORITY_MAX.
+    """
+    if priority is None:
+        raise ValidationError("priority", "cannot be empty")
+    if (
+        not isinstance(priority, int)
+        or isinstance(priority, bool)
+        or not PRIORITY_MIN <= priority <= PRIORITY_MAX
+    ):
+        raise ValidationError(
+            "priority", f"must be an integer between {PRIORITY_MIN} and {PRIORITY_MAX}"
+        )
+
+def create_task(
+    title: str,
+    user_id: int,
+    due_date: str | None = None,
+    priority: int = PRIORITY_DEFAULT,
+) -> dict:
     """Create a new task.
 
     Args:
         title: The task's title.
         user_id: The ID of the user who owns the task.
         due_date: Optional ISO-8601 due date (YYYY-MM-DD), or None.
+        priority: Integer from 1 (urgent) to 5 (low); defaults to 3.
 
     Returns:
         The newly created task record.
 
     Raises:
-        ValidationError: If title is empty or due_date is not a valid ISO-8601 date.
+        ValidationError: If title is empty, due_date is not a valid ISO-8601
+            date, or priority is not an integer from 1 to 5.
         NotFoundError: If no user exists with the given user_id.
     """
     if not title or not title.strip():
         raise ValidationError("title", "cannot be empty")
     _validate_due_date(due_date)
+    _validate_priority(priority)
     get_user(user_id)
     new_id = max(TASKS.keys()) + 1
     TASKS[new_id] = {
@@ -97,6 +133,7 @@ def create_task(title: str, user_id: int, due_date: str | None = None) -> dict:
         "status": "todo",
         "due_date": due_date,
         "user_id": user_id,
+        "priority": priority,
     }
     return TASKS[new_id]
 

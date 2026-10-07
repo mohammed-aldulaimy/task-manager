@@ -3,6 +3,11 @@ from datetime import date
 import pytest
 
 from services.tasks import (
+    PRIORITY_DEFAULT,
+    PRIORITY_MAX,
+    PRIORITY_MIN,
+    TASKS,
+    _validate_priority,
     create_task,
     get_overdue_tasks,
     get_task,
@@ -103,3 +108,49 @@ def test_get_overdue_tasks_excludes_future_undated_done_and_today():
     overdue_ids = [t["id"] for t in get_overdue_tasks(today=TODAY)]
     for task in (future, undated, due_today, finished):
         assert task["id"] not in overdue_ids
+
+# Priority
+
+PRIORITY_RANGE_MESSAGE = "Invalid priority: must be an integer between 1 and 5"
+
+def test_seed_tasks_have_priority():
+    for task in TASKS.values():
+        assert isinstance(task["priority"], int)
+        assert PRIORITY_MIN <= task["priority"] <= PRIORITY_MAX
+
+@pytest.mark.parametrize("priority", [1, 2, 3, 4, 5])
+def test_validate_priority_valid_passes(priority):
+    assert _validate_priority(priority) is None
+
+def test_create_task_without_priority_defaults_to_3():
+    result = create_task("Default priority", 1)
+    assert PRIORITY_DEFAULT == 3
+    assert result["priority"] == 3
+
+@pytest.mark.parametrize("priority", [PRIORITY_MIN, PRIORITY_MAX], ids=["urgent", "low"])
+def test_create_task_with_priority(priority):
+    result = create_task("Prioritized", 1, priority=priority)
+    assert result["priority"] == priority
+    assert get_task(result["id"])["priority"] == priority
+
+@pytest.mark.parametrize(
+    "bad_priority",
+    [0, 6, -1, "3", 2.5, True],
+    ids=["zero", "six", "negative", "string", "float", "bool"],
+)
+def test_create_task_invalid_priority_raises_validation_error(bad_priority):
+    with pytest.raises(ValidationError) as exc_info:
+        create_task("Bad priority", 1, priority=bad_priority)
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.message == PRIORITY_RANGE_MESSAGE
+
+def test_create_task_none_priority_raises_validation_error():
+    with pytest.raises(ValidationError) as exc_info:
+        create_task("No priority", 1, priority=None)
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.message == "Invalid priority: cannot be empty"
+
+def test_create_task_invalid_priority_checked_before_user():
+    with pytest.raises(ValidationError) as exc_info:
+        create_task("Orphan", 999, priority=0)
+    assert exc_info.value.message == PRIORITY_RANGE_MESSAGE
