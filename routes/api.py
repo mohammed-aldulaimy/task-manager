@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
-from services.tasks import get_task, create_task, process_order
+
+from services.tasks import create_task, get_task, process_order  # noqa: F401
 from services.users import get_user
 from utils.errors import AppError
 
