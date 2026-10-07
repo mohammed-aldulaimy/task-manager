@@ -1,10 +1,7 @@
 # Task Manager
 
-Python Flask API for managing tasks and users.
-
 # Goal
-Add a new function to @services/tasks.py that returns all
-tasks for a given user_id. Follow the same pattern as the existing functions. Add a test for it. Run pytest -v when done.
+Python Flask API for managing tasks and users.
 # Commands
 Run all three before declaring any task done:
     Install: pip install -r requirements.txt
