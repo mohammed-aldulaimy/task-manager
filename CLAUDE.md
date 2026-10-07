@@ -16,10 +16,14 @@ Bad input: Raise ValidationError(field, reason), reference create_user
 Tests go in tests/test_<module>.py and import from services.*
 Always use ValidationError for empty input fields and NotFoundError for missing foreign keys, mirroring the exact error handling pattern in services/users.py to ensure this behavior persists across all future service functions.
 Field validation: private _validate_<field>(value) -> None helper that raises ValidationError, with rules as module constants (e.g. TAG_MAX_LEN, TAG_PATTERN). Match regexes with fullmatch. Reject bad input; don't normalize it (e.g. "Work" is rejected, not lowercased)
+Integer fields (e.g. priority): bounds and default are module constants (PRIORITY_MIN = 1, PRIORITY_MAX = 5, PRIORITY_DEFAULT = 3); None -> ValidationError(field, "cannot be empty"); bools, floats and numeric strings ("3") are rejected, not coerced
+Validate every field first, then check foreign keys / look up the record, then mutate, so bad input leaves the store unchanged (see create_task, update_task)
+Partial updates (update_task): each optional field defaults to the private _UNSET marker (_Unset enum in services/tasks.py) meaning "not sent", so None stays a real value (due_date=None clears the date). Only fields that are not _UNSET are validated and applied
+Filters on list functions are optional keyword params defaulting to None and combine with AND (list_tasks(tag, priority))
 Missing join row (e.g. removing a tag the task doesn't have): raise NotFoundError("<Resource>"), e.g. NotFoundError("Tag")
 Check foreign keys by calling the owning module's getter (get_task, get_user) so it raises NotFoundError
 Tests: pytest.raises(<specific AppError subclass>), never pytest.raises(Exception) (ruff B017)
-Tests that mutate a store: autouse fixture snapshots it and restores in place (store.clear(); store.update(snapshot)); see tests/test_tags.py
+Tests that mutate a store: autouse fixture snapshots it and restores in place (store.clear(); store.update(snapshot)); see tests/test_tags.py. For dict-of-dict stores copy each record ({k: dict(v) for k, v in TASKS.items()}), since services mutate records in place; see tests/test_tasks.py
 API tests: app.test_client() from app.py; routes are under /api
 
 # Architecture
@@ -28,6 +32,8 @@ Routes (routes/api.py): Parse the request, call one service function, return jso
     Blueprint mounted at /api in app.py
     Read bodies with request.get_json(silent=True) or {} and data.get(...), so missing fields reach service validation (422) instead of a 500
     Exception, PATCH: pass only the keys present in the body (e.g. update_task(task_id, **{k: data[k] for k in (...) if k in data})), since data.get turns an omitted field into None, and None is a real value (null due_date clears it). Routes never import the service's private _UNSET marker
+    Optional create fields with a service default: data.get("<field>", <DEFAULT constant>) (e.g. data.get("priority", PRIORITY_DEFAULT)), so an omitted field gets the default but an explicit null reaches validation (422)
+    Integer query params (e.g. GET /tasks?priority=): convert with int() only if value.isdecimal(); otherwise pass the raw string through so the service returns 422, never a 500
     Creating something returns 201; mutating a task's tags returns {"task_id": ..., "tags": [...]}
 Services (services/tasks.py, services/users.py, services/tags.py): All validation and data access. Each module owns its store
     Stores are module-level in-memory structures (USERS, TASKS dicts); data resets on server restart
@@ -39,6 +45,7 @@ Canonical example: get_user in services/users.py
 # Do Not Touch
 Signatures of get_task, process_order, add_tag, remove_tag, imported directly by routes/api.py
     create_task and list_tasks may gain new parameters, but only appended at the end with a default, so existing callers keep working
+    update_task(task_id, ...) is called by the PATCH route with keyword args; new fields are added as keyword params defaulting to _UNSET
 utils/errors.py constructors and message / status_code attributes. Add subclasses when needed but don't edit these.
 Never raise plain Exception, ValueError, or KeyError from services
 Never create a repositories/ package or add a database
