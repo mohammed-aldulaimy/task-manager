@@ -2,6 +2,7 @@ from datetime import date
 
 import pytest
 
+from app import app
 from services.tasks import (
     PRIORITY_DEFAULT,
     PRIORITY_MAX,
@@ -12,10 +13,23 @@ from services.tasks import (
     get_overdue_tasks,
     get_task,
     get_tasks_for_user,
+    list_tasks,
     process_order,
+    update_task,
 )
 from utils.errors import NotFoundError, ValidationError
 
+
+@pytest.fixture(autouse=True)
+def restore_tasks():
+    snapshot = {task_id: dict(task) for task_id, task in TASKS.items()}
+    yield
+    TASKS.clear()
+    TASKS.update(snapshot)
+
+@pytest.fixture
+def client():
+    return app.test_client()
 
 def test_process_order_valid():
     result = process_order(1)
@@ -154,3 +168,202 @@ def test_create_task_invalid_priority_checked_before_user():
     with pytest.raises(ValidationError) as exc_info:
         create_task("Orphan", 999, priority=0)
     assert exc_info.value.message == PRIORITY_RANGE_MESSAGE
+
+# update_task
+
+DUE_DATE_MESSAGE = "Invalid due_date: must be an ISO-8601 date (YYYY-MM-DD)"
+
+def test_update_task_priority():
+    result = update_task(2, priority=1)
+    assert result["priority"] == 1
+    assert get_task(2)["priority"] == 1
+    assert result["title"] == "Write report"
+    assert result["due_date"] == "2099-12-31"
+
+def test_update_task_title_and_due_date():
+    result = update_task(2, title="Write summary", due_date="2027-01-01")
+    assert result["title"] == "Write summary"
+    assert result["due_date"] == "2027-01-01"
+    assert result["priority"] == 2
+
+def test_update_task_no_fields_returns_unchanged():
+    before = dict(get_task(2))
+    assert update_task(2) == before
+
+def test_update_task_clears_due_date():
+    result = update_task(2, due_date=None)
+    assert result["due_date"] is None
+    assert get_task(2)["due_date"] is None
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("title", "", "Invalid title: cannot be empty"),
+        ("title", None, "Invalid title: cannot be empty"),
+        ("priority", None, "Invalid priority: cannot be empty"),
+        ("priority", 0, PRIORITY_RANGE_MESSAGE),
+        ("priority", 6, PRIORITY_RANGE_MESSAGE),
+        ("priority", "3", PRIORITY_RANGE_MESSAGE),
+        ("priority", True, PRIORITY_RANGE_MESSAGE),
+        ("due_date", "nope", DUE_DATE_MESSAGE),
+    ],
+    ids=[
+        "empty_title", "none_title", "none_priority", "zero_priority",
+        "six_priority", "string_priority", "bool_priority", "bad_due_date",
+    ],
+)
+def test_update_task_invalid_field_raises_validation_error(field, value, message):
+    before = dict(get_task(2))
+    with pytest.raises(ValidationError) as exc_info:
+        update_task(2, **{field: value})
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.message == message
+    assert get_task(2) == before
+
+def test_update_task_unknown_task_raises_not_found_error():
+    with pytest.raises(NotFoundError) as exc_info:
+        update_task(999, priority=1)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message == "Task not found"
+
+def test_update_task_invalid_field_checked_before_task():
+    with pytest.raises(ValidationError) as exc_info:
+        update_task(999, priority=0)
+    assert exc_info.value.message == PRIORITY_RANGE_MESSAGE
+
+# list_tasks priority filter
+
+def test_list_tasks_filters_by_priority():
+    assert [task["id"] for task in list_tasks(priority=3)] == [1, 3]
+
+def test_list_tasks_priority_and_tag_combined():
+    assert [task["id"] for task in list_tasks("errand", priority=3)] == [1]
+    assert list_tasks("work", priority=3) == []
+
+def test_list_tasks_priority_no_match_returns_empty():
+    assert list_tasks(priority=5) == []
+
+def test_list_tasks_reflects_updated_priority():
+    update_task(2, priority=3)
+    assert [task["id"] for task in list_tasks(priority=3)] == [1, 2, 3]
+
+@pytest.mark.parametrize(
+    "bad_priority",
+    [0, 6, "3", True],
+    ids=["zero", "six", "string", "bool"],
+)
+def test_list_tasks_invalid_priority_raises_validation_error(bad_priority):
+    with pytest.raises(ValidationError) as exc_info:
+        list_tasks(priority=bad_priority)
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.message == PRIORITY_RANGE_MESSAGE
+
+# API
+
+def test_api_create_task_default_priority(client):
+    response = client.post("/api/tasks", json={"title": "x", "user_id": 1})
+    assert response.status_code == 201
+    assert response.get_json()["priority"] == 3
+
+def test_api_create_task_with_priority(client):
+    response = client.post("/api/tasks", json={"title": "x", "user_id": 1, "priority": 5})
+    assert response.status_code == 201
+    task = response.get_json()
+    assert task["priority"] == 5
+    assert client.get(f"/api/tasks/{task['id']}").get_json()["priority"] == 5
+
+@pytest.mark.parametrize(
+    ("bad_priority", "message"),
+    [
+        (0, PRIORITY_RANGE_MESSAGE),
+        ("3", PRIORITY_RANGE_MESSAGE),
+        (None, "Invalid priority: cannot be empty"),
+    ],
+    ids=["zero", "string", "null"],
+)
+def test_api_create_task_invalid_priority(client, bad_priority, message):
+    response = client.post(
+        "/api/tasks", json={"title": "x", "user_id": 1, "priority": bad_priority}
+    )
+    assert response.status_code == 422
+    assert response.get_json() == {"error": message}
+
+def test_api_create_task_empty_body(client):
+    response = client.post("/api/tasks")
+    assert response.status_code == 422
+    assert response.get_json() == {"error": "Invalid title: cannot be empty"}
+
+def test_api_create_task_unknown_user(client):
+    response = client.post("/api/tasks", json={"title": "x", "user_id": 999})
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "User not found"}
+
+def test_api_update_task_priority(client):
+    response = client.patch("/api/tasks/2", json={"priority": 1})
+    assert response.status_code == 200
+    task = response.get_json()
+    assert task["priority"] == 1
+    assert task["title"] == "Write report"
+    assert task["due_date"] == "2099-12-31"
+
+def test_api_update_task_null_due_date_clears(client):
+    response = client.patch("/api/tasks/2", json={"due_date": None})
+    assert response.status_code == 200
+    assert response.get_json()["due_date"] is None
+
+@pytest.mark.parametrize("kwargs", [{"json": {}}, {}], ids=["empty_json", "no_body"])
+def test_api_update_task_no_fields_unchanged(client, kwargs):
+    before = dict(get_task(2))
+    response = client.patch("/api/tasks/2", **kwargs)
+    assert response.status_code == 200
+    assert response.get_json() == before
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ({"title": ""}, "Invalid title: cannot be empty"),
+        ({"priority": None}, "Invalid priority: cannot be empty"),
+    ],
+    ids=["empty_title", "null_priority"],
+)
+def test_api_update_task_invalid_field(client, body, message):
+    before = dict(get_task(2))
+    response = client.patch("/api/tasks/2", json=body)
+    assert response.status_code == 422
+    assert response.get_json() == {"error": message}
+    assert get_task(2) == before
+
+def test_api_update_task_unknown_task(client):
+    response = client.patch("/api/tasks/999", json={"priority": 1})
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Task not found"}
+
+def test_api_list_tasks_filtered_by_priority(client):
+    response = client.get("/api/tasks?priority=3")
+    assert response.status_code == 200
+    assert [task["id"] for task in response.get_json()] == [1, 3]
+
+def test_api_list_tasks_filtered_by_priority_and_tag(client):
+    response = client.get("/api/tasks?priority=3&tag=errand")
+    assert response.status_code == 200
+    assert [task["id"] for task in response.get_json()] == [1]
+
+def test_api_list_tasks_priority_no_match(client):
+    response = client.get("/api/tasks?priority=5")
+    assert response.status_code == 200
+    assert response.get_json() == []
+
+def test_api_get_task_includes_priority(client):
+    response = client.get("/api/tasks/1")
+    assert response.status_code == 200
+    assert response.get_json()["priority"] == 3
+
+@pytest.mark.parametrize(
+    "query",
+    ["abc", "", "9", "-1", "²"],
+    ids=["letters", "empty", "out_of_range", "negative", "superscript"],
+)
+def test_api_list_tasks_invalid_priority(client, query):
+    response = client.get("/api/tasks", query_string={"priority": query})
+    assert response.status_code == 422
+    assert "error" in response.get_json()
