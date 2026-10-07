@@ -36,7 +36,8 @@ Services (services/tasks.py, services/users.py, services/tags.py): All validatio
 Errors: services raise AppError subclasses from utils/errors.py; handle_app_error in routes/api.py turns them into JSON responses.
 Canonical example: get_user in services/users.py
 # Do Not Touch
-Signatures of get_task, create_task, process_order, list_tasks, add_tag, remove_tag, imported directly by routes/api.py
+Signatures of get_task, process_order, add_tag, remove_tag, imported directly by routes/api.py
+    create_task and list_tasks may gain new parameters, but only appended at the end with a default, so existing callers keep working
 utils/errors.py constructors and message / status_code attributes. Add subclasses when needed but don't edit these.
 Never raise plain Exception, ValueError, or KeyError from services
 Never create a repositories/ package or add a database
