@@ -4,6 +4,7 @@
 Python Flask API for managing tasks and users.
 # Commands
 Run all three before declaring any task done:
+    Activate venv first: source .venv/bin/activate (pytest and ruff are only installed there; or call .venv/bin/pytest, .venv/bin/ruff directly)
     Install: pip install -r requirements.txt
     Tests: pytest -v (All must pass)
     Lint: ruff check .
@@ -35,6 +36,13 @@ Routes (routes/api.py): Parse the request, call one service function, return jso
     Optional create fields with a service default: data.get("<field>", <DEFAULT constant>) (e.g. data.get("priority", PRIORITY_DEFAULT)), so an omitted field gets the default but an explicit null reaches validation (422)
     Integer query params (e.g. GET /tasks?priority=): convert with int() only if value.isdecimal(); otherwise pass the raw string through so the service returns 422, never a 500
     Creating something returns 201; mutating a task's tags returns {"task_id": ..., "tags": [...]}
+    Sub-resource of a user (e.g. /users/<id>/notifications) returns {"user_id": ..., "<field>": ...}, built from the service's return value; GET /users/<id> returns the full record
+Layer boundary (routes/ <-> services/), following services/users.py as the canonical pattern:
+    Routes import only public service functions and public constants (e.g. PRIORITY_DEFAULT); never stores (USERS, TASKS, TASK_TAGS), private helpers (_validate_*), or _UNSET
+    Routes do no validation, no store reads/writes, and raise no errors; anything a route would check belongs in a services/ function that raises ValidationError / NotFoundError
+    Routes import only AppError from utils/errors.py (for handle_app_error); services import the specific subclasses
+    Services never import flask (no request, jsonify, or status codes); they take plain Python args and return plain dicts, lists, or values, so they are callable from tests without app.test_client()
+    One route calls one service function; if a route needs two, add a service function that combines them (e.g. get_notification_pref wraps get_user)
 Services (services/tasks.py, services/users.py, services/tags.py): All validation and data access. Each module owns its store
     Stores are module-level in-memory structures (USERS, TASKS dicts); data resets on server restart
     Join tables are sets of tuples, e.g. TASK_TAGS: set[tuple[int, str]] in services/tags.py stands in for task_tags
@@ -46,6 +54,10 @@ Canonical example: get_user in services/users.py
 Signatures of get_task, process_order, add_tag, remove_tag, imported directly by routes/api.py
     create_task and list_tasks may gain new parameters, but only appended at the end with a default, so existing callers keep working
     update_task(task_id, ...) is called by the PATCH route with keyword args; new fields are added as keyword params defaulting to _UNSET
+Signatures of get_user, list_users, get_notification_pref(user_id), update_notification_pref(user_id, notification_pref), imported directly by routes/api.py
+    create_user(name, email) may gain new parameters, but only appended at the end with a default
+NOTIFICATION_PREFS values ("email", "sms", "none") and NOTIFICATION_PREF_DEFAULT = "none": tests and API clients depend on them; add new values only by appending
+Every user record has a notification_pref key (seed users and create_user); don't remove it
 utils/errors.py constructors and message / status_code attributes. Add subclasses when needed but don't edit these.
 Never raise plain Exception, ValueError, or KeyError from services
 Never create a repositories/ package or add a database
